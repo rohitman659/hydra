@@ -10,8 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gobuffalo/pop/v6"
-
 	"github.com/ory/x/errorsx"
 
 	"github.com/ory/fosite/storage"
@@ -222,30 +220,24 @@ func (p *Persister) createSession(ctx context.Context, signature string, request
 
 func (p *Persister) findSessionBySignature(ctx context.Context, rawSignature string, session fosite.Session, table tableName) (fosite.Requester, error) {
 	rawSignature = p.hashSignature(rawSignature, table)
-
 	r := OAuth2RequestSQL{Table: table}
 	var fr fosite.Requester
-
-	return fr, p.transaction(ctx, func(ctx context.Context, c *pop.Connection) error {
-		err := p.Connection(ctx).Where("signature = ?", rawSignature).First(&r)
-		if errors.Is(err, sql.ErrNoRows) {
-			return errorsx.WithStack(fosite.ErrNotFound)
-		} else if err != nil {
-			return sqlcon.HandleError(err)
-		} else if !r.Active {
-			fr, err = r.toRequest(ctx, session, p)
-			if err != nil {
-				return err
-			} else if table == sqlTableCode {
-				return errorsx.WithStack(fosite.ErrInvalidatedAuthorizeCode)
-			}
-
-			return errorsx.WithStack(fosite.ErrInactiveToken)
-		}
-
+	err := p.Connection(ctx).Where("signature = ?", rawSignature).First(&r)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fr, errorsx.WithStack(fosite.ErrNotFound)
+	} else if err != nil {
+		return fr, errors.New("sql_error")
+	} else if !r.Active {
 		fr, err = r.toRequest(ctx, session, p)
-		return err
-	})
+		if err != nil {
+			return fr, err
+		} else if table == sqlTableCode {
+			return fr, errorsx.WithStack(fosite.ErrInvalidatedAuthorizeCode)
+		}
+		return fr, errorsx.WithStack(fosite.ErrInactiveToken)
+	}
+	fr, err = r.toRequest(ctx, session, p)
+	return fr, err
 }
 
 func (p *Persister) deleteSessionBySignature(ctx context.Context, signature string, table tableName) error {

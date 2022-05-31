@@ -443,6 +443,13 @@ func (h *Handler) IntrospectHandler(w http.ResponseWriter, r *http.Request, _ ht
 
 	tt, ar, err := h.r.OAuth2Provider().IntrospectToken(ctx, token, fosite.TokenType(tokenType), session, strings.Split(scope, " ")...)
 	if err != nil {
+		if errorsx.Cause(err).Error() == "sql_error" {
+			// returning 500 in case of sql error
+			w.Header().Set("Content-Type", "application/json;charset=UTF-8")
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintln(w, `{"error":"sql_error"}`)
+			return
+		}
 		x.LogAudit(r, err, h.r.Logger())
 		err := errorsx.WithStack(fosite.ErrInactiveToken.WithHint("An introspection strategy indicated that the token is inactive.").WithDebug(err.Error()))
 		h.r.OAuth2Provider().WriteIntrospectionError(w, err)

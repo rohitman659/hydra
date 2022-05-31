@@ -122,7 +122,7 @@ func (p *Persister) transaction(ctx context.Context, f func(ctx context.Context,
 		c, err = p.conn.WithContext(ctx).NewTransaction()
 
 		if err != nil {
-			return errorsx.WithStack(err)
+			return errors.New("sql_error")
 		}
 	}
 

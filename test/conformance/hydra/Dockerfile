@@ -1,35 +1,35 @@
-FROM golang:1.15-buster AS builder
+FROM golang:1.17-buster AS builder
 
 RUN apt-get update && \
-  apt-get install -y git gcc bash ssl-cert ca-certificates
+    apt-get install --no-install-recommends -y \
+    git gcc bash ssl-cert ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /go/src/github.com/ory/hydra
 
-ADD go.mod go.mod
-ADD go.sum go.sum
+COPY go.mod go.sum ./
 
 ENV GO111MODULE on
 ENV CGO_ENABLED 1
 
 RUN go mod download
 
-ADD . .
+COPY . .
 
-RUN make pack && go build -tags sqlite -o /usr/bin/hydra
+RUN go build -tags sqlite -o /usr/bin/hydra
 
 VOLUME /var/lib/sqlite
 
-# Exposing the ory home directory to simplify passing in hydra configuration (e.g. if the file $HOME/.hydra.yaml
-# exists, it will be automatically used as the configuration file).
+# Exposing the ory home directory
 VOLUME /home/ory
 
-# Declare the standard ports used by hydra (4433 for public service endpoint, 4434 for admin service endpoint)
+# Declare the standard ports used by hydra (4444 for public service endpoint, 4445 for admin service endpoint)
 EXPOSE 4444 4445
 
-RUN mv test/conformance/ssl/ory-ca.* /etc/ssl/certs/
-RUN mv test/conformance/ssl/ory-conformity.crt /etc/ssl/certs/
-RUN mv test/conformance/ssl/ory-conformity.key /etc/ssl/private/
-RUN update-ca-certificates
+RUN mv test/conformance/ssl/ory-ca.* /etc/ssl/certs/ && \
+    mv test/conformance/ssl/ory-conformity.crt /etc/ssl/certs/ && \
+    mv test/conformance/ssl/ory-conformity.key /etc/ssl/private/ && \
+    update-ca-certificates
 
 ENTRYPOINT ["hydra"]
 CMD ["serve"]

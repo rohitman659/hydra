@@ -64,6 +64,9 @@ serve:
 
 dsn: memory
 
+hsm:
+  enabled: false
+
 webfinger:
   jwks:
     broadcast_keys:
@@ -86,6 +89,7 @@ oidc:
     pairwise:
       salt: random_salt
   dynamic_client_registration:
+    enabled: false
     default_scope:
       - whatever
 
@@ -135,6 +139,7 @@ tracing:
     jaeger:
       local_agent_address: 127.0.0.1:6831
       propagation: jaeger
+      max_tag_value_length: 1024
       sampling:
         type: const
         value: 1

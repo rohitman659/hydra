@@ -26,7 +26,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ory/hydra/driver/config"
@@ -35,11 +34,12 @@ import (
 
 	"github.com/ory/x/sqlcon"
 
-	jwtgo "github.com/dgrijalva/jwt-go"
 	"github.com/gorilla/sessions"
 	"github.com/pborman/uuid"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+
+	jwtgo "github.com/ory/fosite/token/jwt"
 
 	"github.com/ory/x/sqlxx"
 
@@ -109,7 +109,7 @@ func (s *DefaultStrategy) matchesValueFromSession(ctx context.Context, c fosite.
 
 func (s *DefaultStrategy) authenticationSession(w http.ResponseWriter, r *http.Request) (*LoginSession, error) {
 	// We try to open the session cookie. If it does not exist (indicated by the error), we must authenticate the user.
-	cookie, err := s.r.CookieStore().Get(r, CookieName(s.c.ServesHTTPS(), CookieAuthenticationName))
+	cookie, err := s.r.CookieStore().Get(r, CookieName(s.c.TLS(config.PublicInterface).Enabled(), CookieAuthenticationName))
 	if err != nil {
 		s.r.Logger().
 			WithRequest(r).
@@ -190,13 +190,7 @@ func (s *DefaultStrategy) getIDTokenHintClaims(ctx context.Context, idTokenHint 
 	} else if err != nil {
 		return nil, errorsx.WithStack(fosite.ErrInvalidRequest.WithHint(err.Error()))
 	}
-
-	claims, ok := token.Claims.(jwtgo.MapClaims)
-	if !ok {
-		return nil, errorsx.WithStack(fosite.ErrInvalidRequest.WithHint("Failed to validate OpenID Connect request as decoding id token from id_token_hint to jwt.MapClaims failed."))
-	}
-
-	return claims, nil
+	return token.Claims, nil
 }
 
 func (s *DefaultStrategy) getSubjectFromIDTokenHint(ctx context.Context, idTokenHint string) (string, error) {
@@ -286,7 +280,7 @@ func (s *DefaultStrategy) forwardAuthenticationRequest(w http.ResponseWriter, r 
 		return errorsx.WithStack(err)
 	}
 
-	if err := createCsrfSession(w, r, s.r.CookieStore(), cookieAuthenticationCSRFName, csrf, s.c.ServesHTTPS(), s.c.CookieSameSiteMode(), s.c.CookieSameSiteLegacyWorkaround()); err != nil {
+	if err := createCsrfSession(w, r, s.r.CookieStore(), cookieAuthenticationCSRFName, csrf, s.c.TLS(config.PublicInterface).Enabled(), s.c.CookieSameSiteMode(), s.c.CookieSameSiteLegacyWorkaround()); err != nil {
 		return errorsx.WithStack(err)
 	}
 
@@ -310,13 +304,13 @@ func (s *DefaultStrategy) revokeAuthenticationSession(w http.ResponseWriter, r *
 }
 
 func (s *DefaultStrategy) revokeAuthenticationCookie(w http.ResponseWriter, r *http.Request, ss sessions.Store) (string, error) {
-	cookie, _ := ss.Get(r, CookieName(s.c.ServesHTTPS(), CookieAuthenticationName))
+	cookie, _ := ss.Get(r, CookieName(s.c.TLS(config.PublicInterface).Enabled(), CookieAuthenticationName))
 	sid, _ := mapx.GetString(cookie.Values, CookieAuthenticationSIDName)
 
 	cookie.Values[CookieAuthenticationSIDName] = ""
 	cookie.Options.HttpOnly = true
 	cookie.Options.SameSite = s.c.CookieSameSiteMode()
-	cookie.Options.Secure = s.c.ServesHTTPS()
+	cookie.Options.Secure = s.c.TLS(config.PublicInterface).Enabled()
 	cookie.Options.MaxAge = -1
 
 	if err := cookie.Save(r, w); err != nil {
@@ -362,7 +356,7 @@ func (s *DefaultStrategy) verifyAuthentication(w http.ResponseWriter, r *http.Re
 		return nil, errorsx.WithStack(fosite.ErrRequestUnauthorized.WithHint("The login request has expired. Please try again."))
 	}
 
-	if err := validateCsrfSession(r, s.r.CookieStore(), cookieAuthenticationCSRFName, session.LoginRequest.CSRF, s.c.CookieSameSiteLegacyWorkaround(), s.c.ServesHTTPS()); err != nil {
+	if err := validateCsrfSession(r, s.r.CookieStore(), cookieAuthenticationCSRFName, session.LoginRequest.CSRF, s.c.CookieSameSiteLegacyWorkaround(), s.c.TLS(config.PublicInterface).Enabled()); err != nil {
 		return nil, err
 	}
 
@@ -459,24 +453,24 @@ func (s *DefaultStrategy) verifyAuthentication(w http.ResponseWriter, r *http.Re
 	}
 
 	// Not a skipped login and the user asked to remember its session, store a cookie
-	cookie, _ := s.r.CookieStore().Get(r, CookieName(s.c.ServesHTTPS(), CookieAuthenticationName))
+	cookie, _ := s.r.CookieStore().Get(r, CookieName(s.c.TLS(config.PublicInterface).Enabled(), CookieAuthenticationName))
 	cookie.Values[CookieAuthenticationSIDName] = sessionID
 	if session.RememberFor >= 0 {
 		cookie.Options.MaxAge = session.RememberFor
 	}
 	cookie.Options.HttpOnly = true
 	cookie.Options.SameSite = s.c.CookieSameSiteMode()
-	cookie.Options.Secure = s.c.ServesHTTPS()
+	cookie.Options.Secure = s.c.TLS(config.PublicInterface).Enabled()
 	if err := cookie.Save(r, w); err != nil {
 		return nil, errorsx.WithStack(err)
 	}
 
 	s.r.Logger().WithRequest(r).
 		WithFields(logrus.Fields{
-			"cookie_name":      CookieName(s.c.ServesHTTPS(), CookieAuthenticationName),
+			"cookie_name":      CookieName(s.c.TLS(config.PublicInterface).Enabled(), CookieAuthenticationName),
 			"cookie_http_only": true,
 			"cookie_same_site": s.c.CookieSameSiteMode(),
-			"cookie_secure":    s.c.ServesHTTPS(),
+			"cookie_secure":    s.c.TLS(config.PublicInterface).Enabled(),
 		}).Debug("Authentication session cookie was set.")
 	return session, nil
 }
@@ -554,6 +548,7 @@ func (s *DefaultStrategy) forwardConsentRequest(w http.ResponseWriter, r *http.R
 		&ConsentRequest{
 			ID:                     challenge,
 			ACR:                    as.ACR,
+			AMR:                    as.AMR,
 			Verifier:               verifier,
 			CSRF:                   csrf,
 			Skip:                   skip,
@@ -574,7 +569,7 @@ func (s *DefaultStrategy) forwardConsentRequest(w http.ResponseWriter, r *http.R
 		return errorsx.WithStack(err)
 	}
 
-	if err := createCsrfSession(w, r, s.r.CookieStore(), cookieConsentCSRFName, csrf, s.c.ServesHTTPS(), s.c.CookieSameSiteMode(), s.c.CookieSameSiteLegacyWorkaround()); err != nil {
+	if err := createCsrfSession(w, r, s.r.CookieStore(), cookieConsentCSRFName, csrf, s.c.TLS(config.PublicInterface).Enabled(), s.c.CookieSameSiteMode(), s.c.CookieSameSiteLegacyWorkaround()); err != nil {
 		return errorsx.WithStack(err)
 	}
 
@@ -609,7 +604,7 @@ func (s *DefaultStrategy) verifyConsent(w http.ResponseWriter, r *http.Request, 
 		return nil, errorsx.WithStack(fosite.ErrServerError.WithHint("The authenticatedAt value was not set."))
 	}
 
-	if err := validateCsrfSession(r, s.r.CookieStore(), cookieConsentCSRFName, session.ConsentRequest.CSRF, s.c.CookieSameSiteLegacyWorkaround(), s.c.ServesHTTPS()); err != nil {
+	if err := validateCsrfSession(r, s.r.CookieStore(), cookieConsentCSRFName, session.ConsentRequest.CSRF, s.c.CookieSameSiteLegacyWorkaround(), s.c.TLS(config.PublicInterface).Enabled()); err != nil {
 		return nil, err
 	}
 
@@ -700,41 +695,32 @@ func (s *DefaultStrategy) executeBackChannelLogout(ctx context.Context, r *http.
 		tasks = append(tasks, task{url: c.BackChannelLogoutURI, clientID: c.OutfacingID, token: t})
 	}
 
-	var wg sync.WaitGroup
-	hc := http.Client{
-		Timeout:   time.Second * 5,
-		Transport: httpx.NewDefaultResilientRoundTripper(time.Second, time.Second*5),
-	}
-	wg.Add(len(tasks))
+	hc := httpx.NewResilientClient()
 
 	var execute = func(t task) {
-		defer wg.Done()
+		log := s.r.Logger().WithRequest(r).
+			WithField("client_id", t.clientID).
+			WithField("backchannel_logout_url", t.url)
 
 		res, err := hc.PostForm(t.url, url.Values{"logout_token": {t.token}})
 		if err != nil {
-			s.r.Logger().WithRequest(r).WithError(err).
-				WithField("client_id", t.clientID).
-				WithField("backchannel_logout_url", t.url).
-				Error("Unable to execute OpenID Connect Back-Channel Logout Request")
+			log.WithError(err).Error("Unable to execute OpenID Connect Back-Channel Logout Request")
 			return
 		}
 		defer res.Body.Close()
 
 		if res.StatusCode != http.StatusOK {
-			s.r.Logger().WithError(errors.Errorf("expected HTTP status code %d but got %d", http.StatusOK, res.StatusCode)).
-				WithRequest(r).
-				WithField("client_id", t.clientID).
-				WithField("backchannel_logout_url", t.url).
+			log.WithError(errors.Errorf("expected HTTP status code %d but got %d", http.StatusOK, res.StatusCode)).
 				Error("Unable to execute OpenID Connect Back-Channel Logout Request")
 			return
+		} else {
+			log.Info("Back-Channel Logout Request")
 		}
 	}
 
 	for _, t := range tasks {
 		go execute(t)
 	}
-
-	wg.Wait()
 
 	return nil
 }

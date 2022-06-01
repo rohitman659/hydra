@@ -27,8 +27,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	jwtgo "github.com/dgrijalva/jwt-go"
 	"github.com/stretchr/testify/require"
+
+	jwtgo "github.com/ory/fosite/token/jwt"
 
 	"github.com/ory/fosite/token/jwt"
 	"github.com/ory/x/urlx"
@@ -110,7 +111,7 @@ func newAuthCookieJar(t *testing.T, reg driver.Registry, u, sessionID string) ht
 	}
 
 	hr := &http.Request{Header: map[string][]string{}, URL: urlx.ParseOrPanic(u), RequestURI: u}
-	cookie, _ := reg.CookieStore().Get(hr, CookieName(reg.Config().ServesHTTPS(), CookieAuthenticationName))
+	cookie, _ := reg.CookieStore().Get(hr, CookieName(reg.Config().TLS(config.PublicInterface).Enabled(), CookieAuthenticationName))
 
 	cookie.Values[CookieAuthenticationSIDName] = sessionID
 	cookie.Options.HttpOnly = true
@@ -122,7 +123,7 @@ func newAuthCookieJar(t *testing.T, reg driver.Registry, u, sessionID string) ht
 	return cj
 }
 
-func genIDToken(t *testing.T, reg driver.Registry, c jwtgo.Claims) string {
+func genIDToken(t *testing.T, reg driver.Registry, c jwtgo.MapClaims) string {
 	r, _, err := reg.OpenIDJWTStrategy().Generate(context.TODO(), c, jwt.NewHeaders())
 	require.NoError(t, err)
 	return r

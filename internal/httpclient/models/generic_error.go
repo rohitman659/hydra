@@ -6,38 +6,66 @@ package models
 // Editing this file might prove futile when you re-run the swagger generate command
 
 import (
+	"context"
+
 	"github.com/go-openapi/errors"
 	"github.com/go-openapi/strfmt"
 	"github.com/go-openapi/swag"
 	"github.com/go-openapi/validate"
 )
 
-// GenericError Error response
-//
-// Error responses are sent when an error (e.g. unauthorized, bad request, ...) occurred.
+// GenericError generic error
 //
 // swagger:model genericError
 type GenericError struct {
 
-	// Debug contains debug information. This is usually not available and has to be enabled.
+	// The status code
+	// Example: 404
+	Code int64 `json:"code,omitempty"`
+
+	// Debug information
+	//
+	// This field is often not exposed to protect against leaking
+	// sensitive information.
+	// Example: SQL field \"foo\" is not a bool.
 	Debug string `json:"debug,omitempty"`
 
-	// Name is the error name.
+	// Further error details
+	Details interface{} `json:"details,omitempty"`
+
+	// The error ID
+	//
+	// Useful when trying to identify various errors in application logic.
+	ID string `json:"id,omitempty"`
+
+	// Error message
+	//
+	// The error's message.
+	// Example: The resource could not be found
 	// Required: true
-	Error *string `json:"error"`
+	Message *string `json:"message"`
 
-	// Description contains further information on the nature of the error.
-	ErrorDescription string `json:"error_description,omitempty"`
+	// A human-readable reason for the error
+	// Example: User with ID 1234 does not exist.
+	Reason string `json:"reason,omitempty"`
 
-	// Code represents the error status code (404, 403, 401, ...).
-	StatusCode int64 `json:"status_code,omitempty"`
+	// The request ID
+	//
+	// The request ID is often exposed internally in order to trace
+	// errors across service architectures. This is often a UUID.
+	// Example: d7ef54b1-ec15-46e6-bccb-524b82c035e6
+	Request string `json:"request,omitempty"`
+
+	// The status description
+	// Example: Not Found
+	Status string `json:"status,omitempty"`
 }
 
 // Validate validates this generic error
 func (m *GenericError) Validate(formats strfmt.Registry) error {
 	var res []error
 
-	if err := m.validateError(formats); err != nil {
+	if err := m.validateMessage(formats); err != nil {
 		res = append(res, err)
 	}
 
@@ -47,12 +75,17 @@ func (m *GenericError) Validate(formats strfmt.Registry) error {
 	return nil
 }
 
-func (m *GenericError) validateError(formats strfmt.Registry) error {
+func (m *GenericError) validateMessage(formats strfmt.Registry) error {
 
-	if err := validate.Required("error", "body", m.Error); err != nil {
+	if err := validate.Required("message", "body", m.Message); err != nil {
 		return err
 	}
 
+	return nil
+}
+
+// ContextValidate validates this generic error based on context it is used
+func (m *GenericError) ContextValidate(ctx context.Context, formats strfmt.Registry) error {
 	return nil
 }
 

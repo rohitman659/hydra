@@ -33,9 +33,9 @@ describe('OAuth 2.0 Authorization Endpoint Error Handling', () => {
           expect(error_description).to.equal(
             'The resource owner denied the request'
           )
-          expect(access_token).to.be.empty
-          expect(id_token).to.be.empty
-          expect(refresh_token).to.be.empty
+          expect(access_token).to.be.undefined
+          expect(id_token).to.be.undefined
+          expect(refresh_token).to.be.undefined
         })
     })
 
@@ -58,9 +58,9 @@ describe('OAuth 2.0 Authorization Endpoint Error Handling', () => {
           expect(error_description).to.equal(
             'The resource owner denied the request'
           )
-          expect(access_token).to.be.empty
-          expect(id_token).to.be.empty
-          expect(refresh_token).to.be.empty
+          expect(access_token).to.be.undefined
+          expect(id_token).to.be.undefined
+          expect(refresh_token).to.be.undefined
         })
     })
   })
@@ -77,7 +77,7 @@ describe('OAuth 2.0 Authorization Endpoint Error Handling', () => {
       const query = qs.parse(search.substr(1))
       expect(query.error).to.equal('invalid_client')
 
-      // Should show ORY Hydra's Error URL because a redirect URL could not be determined
+      // Should show Ory Hydra's Error URL because a redirect URL could not be determined
       expect(port).to.equal(Cypress.env('public_port'))
     })
   })
@@ -90,7 +90,7 @@ describe('OAuth 2.0 Authorization Endpoint Error Handling', () => {
       redirect_uris: [`${Cypress.env('client_url')}/oauth2/callback`],
       grant_types: ['authorization_code']
     }
-    cy.wrap(createClient(c))
+    createClient(c)
 
     cy.visit(
       `${Cypress.env('client_url')}/oauth2/code?client_id=${
@@ -115,7 +115,7 @@ describe('OAuth 2.0 Authorization Endpoint Error Handling', () => {
       redirect_uris: [`${Cypress.env('client_url')}/oauth2/callback`],
       response_types: ['token'] // disallows Authorization Code Grant
     }
-    cy.wrap(createClient(c))
+    createClient(c)
 
     cy.visit(
       `${Cypress.env('client_url')}/oauth2/code?client_id=${
@@ -134,7 +134,7 @@ describe('OAuth 2.0 Authorization Endpoint Error Handling', () => {
       redirect_uris: [`${Cypress.env('client_url')}/oauth2/callback`],
       grant_types: ['client_credentials']
     }
-    cy.wrap(createClient(c))
+    createClient(c)
 
     cy.visit(
       `${Cypress.env('client_url')}/oauth2/code?client_id=${
@@ -158,7 +158,7 @@ describe('OAuth 2.0 Authorization Endpoint Error Handling', () => {
       redirect_uris: ['http://some-other-domain/not-callback'],
       grant_types: ['client_credentials']
     }
-    cy.wrap(createClient(c))
+    createClient(c)
 
     cy.visit(
       `${Cypress.env('client_url')}/oauth2/code?client_id=${
@@ -173,7 +173,7 @@ describe('OAuth 2.0 Authorization Endpoint Error Handling', () => {
       expect(query.error).to.equal('invalid_request')
       expect(query.error_description).to.contain('redirect_uri')
 
-      // Should show ORY Hydra's Error URL because a redirect URL could not be determined
+      // Should show Ory Hydra's Error URL because a redirect URL could not be determined
       expect(port).to.equal(Cypress.env('public_port'))
     })
   })

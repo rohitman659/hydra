@@ -38,9 +38,9 @@ import (
 	"github.com/tidwall/gjson"
 
 	"github.com/ory/hydra/client"
+	"github.com/ory/hydra/consent"
 	"github.com/ory/hydra/internal/testhelpers"
 
-	djwt "github.com/dgrijalva/jwt-go"
 	"github.com/julienschmidt/httprouter"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -54,6 +54,7 @@ import (
 	hydra "github.com/ory/hydra/internal/httpclient/client"
 	"github.com/ory/hydra/internal/httpclient/client/admin"
 	"github.com/ory/hydra/internal/httpclient/models"
+	hydraoauth2 "github.com/ory/hydra/oauth2"
 	"github.com/ory/hydra/x"
 	"github.com/ory/x/pointerx"
 	"github.com/ory/x/urlx"
@@ -144,6 +145,7 @@ func TestAuthCodeWithDefaultStrategy(t *testing.T) {
 				Subject:  &subject,
 				Remember: !*rr.Payload.Skip,
 				Acr:      "1",
+				Amr:      models.StringSlicePipeDelimiter{"pwd"},
 				Context:  map[string]interface{}{"context": "bar"},
 			}
 			if checkRequestPayload != nil {
@@ -201,7 +203,7 @@ func TestAuthCodeWithDefaultStrategy(t *testing.T) {
 		require.True(t, ok)
 		assert.NotEmpty(t, idt)
 
-		body, err := djwt.DecodeSegment(strings.Split(idt, ".")[1])
+		body, err := x.DecodeSegment(strings.Split(idt, ".")[1])
 		require.NoError(t, err)
 
 		claims := gjson.ParseBytes(body)
@@ -212,6 +214,8 @@ func TestAuthCodeWithDefaultStrategy(t *testing.T) {
 		assert.EqualValues(t, reg.Config().IssuerURL().String(), claims.Get("iss").String(), "%s", claims)
 		assert.NotEmpty(t, claims.Get("sid").String(), "%s", claims)
 		assert.Equal(t, "1", claims.Get("acr").String(), "%s", claims)
+		require.Len(t, claims.Get("amr").Array(), 1, "%s", claims)
+		assert.EqualValues(t, "pwd", claims.Get("amr").Array()[0].String(), "%s", claims)
 
 		require.Len(t, claims.Get("aud").Array(), 1, "%s", claims)
 		assert.EqualValues(t, c.ClientID, claims.Get("aud").Array()[0].String(), "%s", claims)
@@ -241,7 +245,7 @@ func TestAuthCodeWithDefaultStrategy(t *testing.T) {
 		}
 		require.Len(t, parts, 3)
 
-		body, err := djwt.DecodeSegment(parts[1])
+		body, err := x.DecodeSegment(parts[1])
 		require.NoError(t, err)
 
 		i := gjson.ParseBytes(body)
@@ -340,7 +344,7 @@ func TestAuthCodeWithDefaultStrategy(t *testing.T) {
 				WithLoginChallenge(r.URL.Query().Get("login_challenge")).
 				WithBody(&models.AcceptLoginRequest{Subject: pointerx.String(""), Remember: true}))
 			require.Error(t, err) // expects 400
-			assert.Contains(t, err.(*admin.AcceptLoginRequestBadRequest).Payload.ErrorDescription, "Field 'subject' must not be empty", "%+v", *err.(*admin.AcceptLoginRequestBadRequest).Payload.Error)
+			assert.Contains(t, err.(*admin.AcceptLoginRequestBadRequest).Payload.ErrorDescription, "Field 'subject' must not be empty", "%+v", *err.(*admin.AcceptLoginRequestBadRequest).Payload)
 		}, testhelpers.HTTPServerNoExpectedCallHandler(t))
 		_, conf := newOAuth2Client(t, testhelpers.NewCallbackURL(t, "callback", testhelpers.HTTPServerNotImplementedHandler))
 
@@ -658,7 +662,7 @@ func TestAuthCodeWithMockStrategy(t *testing.T) {
 							return
 						}
 
-						body, err := djwt.DecodeSegment(strings.Split(token, ".")[1])
+						body, err := x.DecodeSegment(strings.Split(token, ".")[1])
 						require.NoError(t, err)
 
 						data := map[string]interface{}{}
@@ -867,13 +871,13 @@ func TestAuthCodeWithMockStrategy(t *testing.T) {
 							t.Skip()
 						}
 
-						body, err := djwt.DecodeSegment(strings.Split(token.AccessToken, ".")[1])
+						body, err := x.DecodeSegment(strings.Split(token.AccessToken, ".")[1])
 						require.NoError(t, err)
 
 						origPayload := map[string]interface{}{}
 						require.NoError(t, json.Unmarshal(body, &origPayload))
 
-						body, err = djwt.DecodeSegment(strings.Split(refreshedToken.AccessToken, ".")[1])
+						body, err = x.DecodeSegment(strings.Split(refreshedToken.AccessToken, ".")[1])
 						require.NoError(t, err)
 
 						refreshedPayload := map[string]interface{}{}
@@ -899,16 +903,135 @@ func TestAuthCodeWithMockStrategy(t *testing.T) {
 						assert.EqualValues(t, http.StatusUnauthorized, res.StatusCode)
 					})
 
-					t.Run("refreshing old token should no longer work", func(t *testing.T) {
-						res, err := testRefresh(t, token, ts.URL, false)
-						require.NoError(t, err)
-						assert.Equal(t, http.StatusBadRequest, res.StatusCode)
-					})
-
 					t.Run("refreshing new refresh token should work", func(t *testing.T) {
 						res, err := testRefresh(t, &refreshedToken, ts.URL, false)
 						require.NoError(t, err)
 						assert.Equal(t, http.StatusOK, res.StatusCode)
+
+						body, err := ioutil.ReadAll(res.Body)
+						require.NoError(t, err)
+						require.NoError(t, json.Unmarshal(body, &refreshedToken))
+					})
+
+					t.Run("should call refresh token hook if configured", func(t *testing.T) {
+						hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+							assert.Equal(t, r.Header.Get("Content-Type"), "application/json; charset=UTF-8")
+
+							var hookReq hydraoauth2.RefreshTokenHookRequest
+							require.NoError(t, json.NewDecoder(r.Body).Decode(&hookReq))
+							require.Equal(t, hookReq.Subject, "foo")
+							require.ElementsMatch(t, hookReq.GrantedScopes, []string{"openid", "offline", "hydra.*"})
+							require.ElementsMatch(t, hookReq.GrantedAudience, []string{})
+							require.Equal(t, hookReq.ClientID, oauthConfig.ClientID)
+
+							claims := map[string]interface{}{
+								"hooked": true,
+							}
+
+							hookResp := hydraoauth2.RefreshTokenHookResponse{
+								Session: consent.ConsentRequestSessionData{
+									AccessToken: claims,
+									IDToken:     claims,
+								},
+							}
+
+							w.WriteHeader(http.StatusOK)
+							require.NoError(t, json.NewEncoder(w).Encode(&hookResp))
+						}))
+						defer hs.Close()
+
+						conf.MustSet(config.KeyRefreshTokenHookURL, hs.URL)
+						defer conf.MustSet(config.KeyRefreshTokenHookURL, nil)
+
+						res, err := testRefresh(t, &refreshedToken, ts.URL, false)
+						require.NoError(t, err)
+						assert.Equal(t, http.StatusOK, res.StatusCode)
+
+						body, err := ioutil.ReadAll(res.Body)
+						require.NoError(t, err)
+						require.NoError(t, json.Unmarshal(body, &refreshedToken))
+
+						accessTokenClaims := testhelpers.IntrospectToken(t, oauthConfig, &refreshedToken, ts)
+						require.True(t, accessTokenClaims.Get("ext.hooked").Bool())
+
+						idTokenBody, err := x.DecodeSegment(
+							strings.Split(
+								gjson.GetBytes(body, "id_token").String(),
+								".",
+							)[1],
+						)
+						require.NoError(t, err)
+
+						require.True(t, gjson.GetBytes(idTokenBody, "hooked").Bool())
+					})
+
+					t.Run("should fail token refresh with `server_error` if hook fails", func(t *testing.T) {
+						hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+							w.WriteHeader(http.StatusInternalServerError)
+						}))
+						defer hs.Close()
+
+						conf.MustSet(config.KeyRefreshTokenHookURL, hs.URL)
+						defer conf.MustSet(config.KeyRefreshTokenHookURL, nil)
+
+						res, err := testRefresh(t, &refreshedToken, ts.URL, false)
+						require.NoError(t, err)
+						assert.Equal(t, http.StatusInternalServerError, res.StatusCode)
+
+						var errBody fosite.RFC6749ErrorJson
+						require.NoError(t, json.NewDecoder(res.Body).Decode(&errBody))
+						require.Equal(t, fosite.ErrServerError.Error(), errBody.Name)
+						require.Equal(t, fosite.ErrServerError.GetDescription(), errBody.Description)
+					})
+
+					t.Run("should fail token refresh with `access_denied` if hook denied the request", func(t *testing.T) {
+						hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+							w.WriteHeader(http.StatusForbidden)
+						}))
+						defer hs.Close()
+
+						conf.MustSet(config.KeyRefreshTokenHookURL, hs.URL)
+						defer conf.MustSet(config.KeyRefreshTokenHookURL, nil)
+
+						res, err := testRefresh(t, &refreshedToken, ts.URL, false)
+						require.NoError(t, err)
+						assert.Equal(t, http.StatusForbidden, res.StatusCode)
+
+						var errBody fosite.RFC6749ErrorJson
+						require.NoError(t, json.NewDecoder(res.Body).Decode(&errBody))
+						require.Equal(t, fosite.ErrAccessDenied.Error(), errBody.Name)
+						require.Equal(t, fosite.ErrAccessDenied.GetDescription(), errBody.Description)
+					})
+
+					t.Run("should fail token refresh with `server_error` if hook response is malformed", func(t *testing.T) {
+						hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+							w.WriteHeader(http.StatusOK)
+						}))
+						defer hs.Close()
+
+						conf.MustSet(config.KeyRefreshTokenHookURL, hs.URL)
+						defer conf.MustSet(config.KeyRefreshTokenHookURL, nil)
+
+						res, err := testRefresh(t, &refreshedToken, ts.URL, false)
+						require.NoError(t, err)
+						assert.Equal(t, http.StatusInternalServerError, res.StatusCode)
+
+						var errBody fosite.RFC6749ErrorJson
+						require.NoError(t, json.NewDecoder(res.Body).Decode(&errBody))
+						require.Equal(t, fosite.ErrServerError.Error(), errBody.Name)
+						require.Equal(t, fosite.ErrServerError.GetDescription(), errBody.Description)
+					})
+
+					t.Run("refreshing old token should no longer work", func(t *testing.T) {
+						res, err := testRefresh(t, token, ts.URL, false)
+						require.NoError(t, err)
+						assert.Equal(t, http.StatusUnauthorized, res.StatusCode)
+					})
+
+					t.Run("attempt to refresh old token should revoke new token", func(t *testing.T) {
+						res, err := testRefresh(t, &refreshedToken, ts.URL, false)
+						require.NoError(t, err)
+						assert.Equal(t, http.StatusUnauthorized, res.StatusCode)
 					})
 
 					t.Run("duplicate code exchange fails", func(t *testing.T) {

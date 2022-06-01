@@ -10,11 +10,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gobuffalo/pop/v6"
+
 	"github.com/ory/x/errorsx"
 
 	"github.com/ory/fosite/storage"
 
-	"github.com/gobuffalo/pop/v5"
 	"github.com/pkg/errors"
 	"github.com/tidwall/gjson"
 
@@ -174,26 +175,26 @@ func (p *Persister) ClientAssertionJWTValid(ctx context.Context, jti string) err
 }
 
 func (p *Persister) SetClientAssertionJWT(ctx context.Context, jti string, exp time.Time) error {
-	return p.transaction(ctx, func(ctx context.Context, c *pop.Connection) error {
-		// delete expired
-		now := "now()"
-		if c.Dialect.Name() == "sqlite3" {
-			now = "CURRENT_TIMESTAMP"
-		}
-		/* #nosec G201 table is static */
-		if err := c.RawQuery(fmt.Sprintf("DELETE FROM %s WHERE expires_at < %s", oauth2.BlacklistedJTI{}.TableName(), now)).Exec(); err != nil {
-			return sqlcon.HandleError(err)
-		}
+	// delete expired
+	c := p.Connection(ctx)
+	now := "now()"
+	if c.Dialect.Name() == "sqlite3" {
+		now = "CURRENT_TIMESTAMP"
+	}
+	/* #nosec G201 table is static */
+	if err := c.RawQuery(fmt.Sprintf("DELETE FROM %s WHERE expires_at < %s", oauth2.BlacklistedJTI{}.TableName(), now)).Exec(); err != nil {
+		return sqlcon.HandleError(err)
+	}
 
-		if err := p.SetClientAssertionJWTRaw(ctx, oauth2.NewBlacklistedJTI(jti, exp)); errors.Is(err, sqlcon.ErrUniqueViolation) {
-			// found a jti
-			return errorsx.WithStack(fosite.ErrJTIKnown)
-		} else if err != nil {
-			return err
-		}
-		// setting worked without a problem
-		return nil
-	})
+	if err := p.SetClientAssertionJWTRaw(ctx, oauth2.NewBlacklistedJTI(jti, exp)); errors.Is(err, sqlcon.ErrUniqueViolation) {
+		// found a jti
+		return errorsx.WithStack(fosite.ErrJTIKnown)
+	} else if err != nil {
+		return err
+	}
+
+	// setting worked without a problem
+	return nil
 }
 
 func (p *Persister) GetClientAssertionJWT(ctx context.Context, j string) (*oauth2.BlacklistedJTI, error) {
@@ -231,14 +232,14 @@ func (p *Persister) findSessionBySignature(ctx context.Context, rawSignature str
 			return errorsx.WithStack(fosite.ErrNotFound)
 		} else if err != nil {
 			return sqlcon.HandleError(err)
-		} else if !r.Active && table == sqlTableCode {
+		} else if !r.Active {
 			fr, err = r.toRequest(ctx, session, p)
 			if err != nil {
 				return err
-			} else {
+			} else if table == sqlTableCode {
 				return errorsx.WithStack(fosite.ErrInvalidatedAuthorizeCode)
 			}
-		} else if !r.Active {
+
 			return errorsx.WithStack(fosite.ErrInactiveToken)
 		}
 
@@ -247,7 +248,7 @@ func (p *Persister) findSessionBySignature(ctx context.Context, rawSignature str
 	})
 }
 
-func (p *Persister) deleteSession(ctx context.Context, signature string, table tableName) error {
+func (p *Persister) deleteSessionBySignature(ctx context.Context, signature string, table tableName) error {
 	signature = p.hashSignature(signature, table)
 
 	/* #nosec G201 table is static */
@@ -257,7 +258,7 @@ func (p *Persister) deleteSession(ctx context.Context, signature string, table t
 			Exec())
 }
 
-func (p *Persister) revokeSession(ctx context.Context, id string, table tableName) error {
+func (p *Persister) deleteSessionByRequestID(ctx context.Context, id string, table tableName) error {
 	/* #nosec G201 table is static */
 	if err := p.Connection(ctx).RawQuery(
 		fmt.Sprintf("DELETE FROM %s WHERE request_id=?", OAuth2RequestSQL{Table: table}.TableName()),
@@ -273,6 +274,18 @@ func (p *Persister) revokeSession(ctx context.Context, id string, table tableNam
 		return err
 	}
 	return nil
+}
+
+func (p *Persister) deactivateSessionByRequestID(ctx context.Context, id string, table tableName) error {
+	/* #nosec G201 table is static */
+	return sqlcon.HandleError(
+		p.Connection(ctx).
+			RawQuery(
+				fmt.Sprintf("UPDATE %s SET active=false WHERE request_id=?", OAuth2RequestSQL{Table: table}.TableName()),
+				id,
+			).
+			Exec(),
+	)
 }
 
 func (p *Persister) CreateAuthorizeCodeSession(ctx context.Context, signature string, requester fosite.Requester) (err error) {
@@ -302,7 +315,7 @@ func (p *Persister) GetAccessTokenSession(ctx context.Context, signature string,
 }
 
 func (p *Persister) DeleteAccessTokenSession(ctx context.Context, signature string) (err error) {
-	return p.deleteSession(ctx, signature, sqlTableAccess)
+	return p.deleteSessionBySignature(ctx, signature, sqlTableAccess)
 }
 
 func (p *Persister) CreateRefreshTokenSession(ctx context.Context, signature string, requester fosite.Requester) (err error) {
@@ -314,7 +327,7 @@ func (p *Persister) GetRefreshTokenSession(ctx context.Context, signature string
 }
 
 func (p *Persister) DeleteRefreshTokenSession(ctx context.Context, signature string) (err error) {
-	return p.deleteSession(ctx, signature, sqlTableRefresh)
+	return p.deleteSessionBySignature(ctx, signature, sqlTableRefresh)
 }
 
 func (p *Persister) CreateOpenIDConnectSession(ctx context.Context, signature string, requester fosite.Requester) error {
@@ -326,7 +339,7 @@ func (p *Persister) GetOpenIDConnectSession(ctx context.Context, signature strin
 }
 
 func (p *Persister) DeleteOpenIDConnectSession(ctx context.Context, signature string) error {
-	return p.deleteSession(ctx, signature, sqlTableOpenID)
+	return p.deleteSessionBySignature(ctx, signature, sqlTableOpenID)
 }
 
 func (p *Persister) GetPKCERequestSession(ctx context.Context, signature string, session fosite.Session) (fosite.Requester, error) {
@@ -338,28 +351,70 @@ func (p *Persister) CreatePKCERequestSession(ctx context.Context, signature stri
 }
 
 func (p *Persister) DeletePKCERequestSession(ctx context.Context, signature string) error {
-	return p.deleteSession(ctx, signature, sqlTablePKCE)
+	return p.deleteSessionBySignature(ctx, signature, sqlTablePKCE)
 }
 
 func (p *Persister) RevokeRefreshToken(ctx context.Context, id string) error {
-	return p.revokeSession(ctx, id, sqlTableRefresh)
+	return p.deactivateSessionByRequestID(ctx, id, sqlTableRefresh)
+}
+
+func (p *Persister) RevokeRefreshTokenMaybeGracePeriod(ctx context.Context, id string, signature string) error {
+	return p.deactivateSessionByRequestID(ctx, id, sqlTableRefresh)
 }
 
 func (p *Persister) RevokeAccessToken(ctx context.Context, id string) error {
-	return p.revokeSession(ctx, id, sqlTableAccess)
+	return p.deleteSessionByRequestID(ctx, id, sqlTableAccess)
 }
 
-func (p *Persister) FlushInactiveAccessTokens(ctx context.Context, notAfter time.Time) error {
+func (p *Persister) flushInactiveTokens(ctx context.Context, notAfter time.Time, limit int, batchSize int, table tableName, lifespan time.Duration) error {
 	/* #nosec G201 table is static */
-	err := p.Connection(ctx).RawQuery(
-		fmt.Sprintf("DELETE FROM %s WHERE requested_at < ? AND requested_at < ?", OAuth2RequestSQL{Table: sqlTableAccess}.TableName()),
-		time.Now().Add(-p.config.AccessTokenLifespan()),
+	// The value of notAfter should be the minimum between input parameter and token max expire based on its configured age
+	requestMaxExpire := time.Now().Add(-lifespan)
+	if requestMaxExpire.Before(notAfter) {
+		notAfter = requestMaxExpire
+	}
+
+	signatures := []string{}
+
+	// Select tokens' signatures with limit
+	q := p.Connection(ctx).RawQuery(
+		fmt.Sprintf("SELECT signature FROM %s WHERE requested_at < ? ORDER BY signature LIMIT %d",
+			OAuth2RequestSQL{Table: table}.TableName(), limit),
 		notAfter,
-	).Exec()
-	if err == sql.ErrNoRows {
-		return errors.Wrap(fosite.ErrNotFound, "")
+	)
+	if err := q.All(&signatures); err == sql.ErrNoRows {
+		return errorsx.WithStack(fosite.ErrNotFound)
+	} else if err != nil {
+		return errorsx.WithStack(err)
+	}
+
+	// Delete tokens in batch
+	var err error
+	for i := 0; i < len(signatures); i += batchSize {
+		j := i + batchSize
+		if j > len(signatures) {
+			j = len(signatures)
+		}
+
+		if i != j {
+			err = p.Connection(ctx).RawQuery(
+				fmt.Sprintf("DELETE FROM %s WHERE signature in (?)", OAuth2RequestSQL{Table: table}.TableName()),
+				signatures[i:j],
+			).Exec()
+			if err != nil {
+				return sqlcon.HandleError(err)
+			}
+		}
 	}
 	return sqlcon.HandleError(err)
+}
+
+func (p *Persister) FlushInactiveAccessTokens(ctx context.Context, notAfter time.Time, limit int, batchSize int) error {
+	return p.flushInactiveTokens(ctx, notAfter, limit, batchSize, sqlTableAccess, p.config.AccessTokenLifespan())
+}
+
+func (p *Persister) FlushInactiveRefreshTokens(ctx context.Context, notAfter time.Time, limit int, batchSize int) error {
+	return p.flushInactiveTokens(ctx, notAfter, limit, batchSize, sqlTableRefresh, p.config.RefreshTokenLifespan())
 }
 
 func (p *Persister) DeleteAccessTokens(ctx context.Context, clientID string) error {

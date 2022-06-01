@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/gobuffalo/pop/v6"
+
 	"github.com/ory/x/sqlxx"
 
 	"github.com/ory/x/errorsx"
 
-	"github.com/gobuffalo/pop/v5"
 	"github.com/pkg/errors"
 
 	"github.com/ory/fosite"
@@ -179,7 +180,7 @@ func (p *Persister) HandleConsentRequest(ctx context.Context, challenge string, 
 			return nil, sqlcon.HandleError(err)
 		}
 
-		if hr.WasUsed {
+		if hr.WasHandled {
 			return nil, errorsx.WithStack(x.ErrConflict.WithHint("The consent request was already used and can no longer be changed."))
 		}
 
@@ -205,11 +206,11 @@ func (p *Persister) VerifyAndInvalidateConsentRequest(ctx context.Context, verif
 			return sqlcon.HandleError(err)
 		}
 
-		if r.WasUsed {
+		if r.WasHandled {
 			return errorsx.WithStack(fosite.ErrInvalidRequest.WithDebug("Consent verifier has been used already."))
 		}
 
-		r.WasUsed = true
+		r.WasHandled = true
 		return c.Update(&r)
 	})
 }
@@ -238,11 +239,11 @@ func (p *Persister) VerifyAndInvalidateLoginRequest(ctx context.Context, verifie
 			return sqlcon.HandleError(err)
 		}
 
-		if d.WasUsed {
+		if d.WasHandled {
 			return errorsx.WithStack(fosite.ErrInvalidRequest.WithDebug("Login verifier has been used already."))
 		}
 
-		d.WasUsed = true
+		d.WasHandled = true
 		return sqlcon.HandleError(c.Update(&d))
 	})
 }
@@ -437,4 +438,97 @@ func (p *Persister) VerifyAndInvalidateLogoutRequest(ctx context.Context, verifi
 		lr = *updated
 		return nil
 	})
+}
+
+func (p *Persister) FlushInactiveLoginConsentRequests(ctx context.Context, notAfter time.Time, limit int, batchSize int) error {
+	/* #nosec G201 table is static */
+	var lr consent.LoginRequest
+	var lrh consent.HandledLoginRequest
+
+	var cr consent.ConsentRequest
+	var crh consent.HandledConsentRequest
+
+	// The value of notAfter should be the minimum between input parameter and request max expire based on its configured age
+	requestMaxExpire := time.Now().Add(-p.config.ConsentRequestMaxAge())
+	if requestMaxExpire.Before(notAfter) {
+		notAfter = requestMaxExpire
+	}
+
+	challenges := []string{}
+	queryFormat := `
+	SELECT %[1]s.challenge
+	FROM %[1]s
+	LEFT JOIN %[2]s ON %[1]s.challenge = %[2]s.challenge
+	WHERE (
+		(%[2]s.challenge IS NULL)
+		OR (%[2]s.error IS NOT NULL AND %[2]s.error <> '{}' AND %[2]s.error <> '')
+	)
+	AND %[1]s.requested_at < ?
+	ORDER BY %[1]s.challenge
+	LIMIT %[3]d
+	`
+
+	// Select challenges from all consent requests that can be safely deleted with limit
+	// where hydra_oauth2_consent_request were unhandled or rejected, so either of these is true
+	// - hydra_oauth2_authentication_request_handled does not exist (unhandled)
+	// - hydra_oauth2_consent_request_handled has valid error (rejected)
+	// AND timed-out
+	// - hydra_oauth2_consent_request.requested_at < minimum between ttl.login_consent_request and notAfter
+	q := p.Connection(ctx).RawQuery(fmt.Sprintf(queryFormat, (&cr).TableName(), (&crh).TableName(), limit), notAfter)
+
+	if err := q.All(&challenges); err == sql.ErrNoRows {
+		return errors.Wrap(fosite.ErrNotFound, "")
+	}
+
+	// Delete in batch consent requests and their references in cascade
+	for i := 0; i < len(challenges); i += batchSize {
+		j := i + batchSize
+		if j > len(challenges) {
+			j = len(challenges)
+		}
+
+		if i != j {
+			q := p.Connection(ctx).RawQuery(
+				fmt.Sprintf("DELETE FROM %s WHERE challenge in (?)", (&cr).TableName()),
+				challenges[i:j],
+			)
+
+			if err := q.Exec(); err != nil {
+				return sqlcon.HandleError(err)
+			}
+		}
+	}
+
+	// Select challenges from all authentication requests that can be safely deleted with limit
+	// where hydra_oauth2_authentication_request were unhandled or rejected, so either of these is true
+	// - hydra_oauth2_authentication_request_handled does not exist (unhandled)
+	// - hydra_oauth2_authentication_request_handled has valid error (rejected)
+	// AND timed-out
+	// - hydra_oauth2_authentication_request.requested_at < minimum between ttl.login_consent_request and notAfter
+	q = p.Connection(ctx).RawQuery(fmt.Sprintf(queryFormat, (&lr).TableName(), (&lrh).TableName(), limit), notAfter)
+
+	if err := q.All(&challenges); err == sql.ErrNoRows {
+		return errors.Wrap(fosite.ErrNotFound, "")
+	}
+
+	// Delete in batch authentication requests
+	for i := 0; i < len(challenges); i += batchSize {
+		j := i + batchSize
+		if j > len(challenges) {
+			j = len(challenges)
+		}
+
+		if i != j {
+			q := p.Connection(ctx).RawQuery(
+				fmt.Sprintf("DELETE FROM %s WHERE challenge in (?)", (&lr).TableName()),
+				challenges[i:j],
+			)
+
+			if err := q.Exec(); err != nil {
+				return sqlcon.HandleError(err)
+			}
+		}
+	}
+
+	return nil
 }

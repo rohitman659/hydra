@@ -34,7 +34,6 @@ import (
 	"github.com/ory/hydra/x"
 
 	"github.com/julienschmidt/httprouter"
-	"github.com/pkg/errors"
 	jose "gopkg.in/square/go-jose.v2"
 )
 
@@ -86,7 +85,7 @@ func (h *Handler) SetRoutes(admin *x.RouterAdmin, public *x.RouterPublic, corsMi
 //
 //     Responses:
 //       200: JSONWebKeySet
-//       500: genericError
+//       500: jsonError
 func (h *Handler) WellKnown(w http.ResponseWriter, r *http.Request) {
 	var jwks jose.JSONWebKeySet
 
@@ -96,13 +95,7 @@ func (h *Handler) WellKnown(w http.ResponseWriter, r *http.Request) {
 			h.r.Writer().WriteError(w, r, err)
 			return
 		}
-
-		keys, err = FindKeysByPrefix(keys, "public")
-		if err != nil {
-			h.r.Writer().WriteError(w, r, err)
-			return
-		}
-
+		keys = ExcludePrivateKeys(keys)
 		jwks.Keys = append(jwks.Keys, keys.Keys...)
 	}
 
@@ -125,8 +118,8 @@ func (h *Handler) WellKnown(w http.ResponseWriter, r *http.Request) {
 //
 //     Responses:
 //       200: JSONWebKeySet
-//       404: genericError
-//       500: genericError
+//       404: jsonError
+//       500: jsonError
 func (h *Handler) GetKey(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	var setName = ps.ByName("set")
 	var keyName = ps.ByName("key")
@@ -136,6 +129,7 @@ func (h *Handler) GetKey(w http.ResponseWriter, r *http.Request, ps httprouter.P
 		h.r.Writer().WriteError(w, r, err)
 		return
 	}
+	keys = ExcludeOpaquePrivateKeys(keys)
 
 	h.r.Writer().Write(w, r, keys)
 }
@@ -158,9 +152,9 @@ func (h *Handler) GetKey(w http.ResponseWriter, r *http.Request, ps httprouter.P
 //
 //     Responses:
 //       200: JSONWebKeySet
-//       401: genericError
-//       403: genericError
-//       500: genericError
+//       401: jsonError
+//       403: jsonError
+//       500: jsonError
 func (h *Handler) GetKeySet(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	var setName = ps.ByName("set")
 
@@ -169,6 +163,7 @@ func (h *Handler) GetKeySet(w http.ResponseWriter, r *http.Request, ps httproute
 		h.r.Writer().WriteError(w, r, err)
 		return
 	}
+	keys = ExcludeOpaquePrivateKeys(keys)
 
 	h.r.Writer().Write(w, r, keys)
 }
@@ -191,9 +186,9 @@ func (h *Handler) GetKeySet(w http.ResponseWriter, r *http.Request, ps httproute
 //
 //     Responses:
 //       201: JSONWebKeySet
-//       401: genericError
-//       403: genericError
-//       500: genericError
+//       401: jsonError
+//       403: jsonError
+//       500: jsonError
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	var keyRequest createRequest
 	var set = ps.ByName("set")
@@ -202,24 +197,12 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request, ps httprouter.P
 		h.r.Writer().WriteError(w, r, errorsx.WithStack(err))
 	}
 
-	generator, found := h.r.KeyGenerators()[keyRequest.Algorithm]
-	if !found {
-		h.r.Writer().WriteErrorCode(w, r, http.StatusBadRequest, errors.Errorf("Generator %s unknown", keyRequest.Algorithm))
-		return
-	}
-
-	keys, err := generator.Generate(keyRequest.KeyID, keyRequest.Use)
-	if err != nil {
+	if keys, err := h.r.KeyManager().GenerateAndPersistKeySet(r.Context(), set, keyRequest.KeyID, keyRequest.Algorithm, keyRequest.Use); err == nil {
+		keys = ExcludeOpaquePrivateKeys(keys)
+		h.r.Writer().WriteCreated(w, r, fmt.Sprintf("%s://%s/keys/%s", r.URL.Scheme, r.URL.Host, set), keys)
+	} else {
 		h.r.Writer().WriteError(w, r, err)
-		return
 	}
-
-	if err := h.r.KeyManager().AddKeySet(r.Context(), set, keys); err != nil {
-		h.r.Writer().WriteError(w, r, err)
-		return
-	}
-
-	h.r.Writer().WriteCreated(w, r, fmt.Sprintf("%s://%s/keys/%s", r.URL.Scheme, r.URL.Host, set), keys)
 }
 
 // swagger:route PUT /keys/{set} admin updateJsonWebKeySet
@@ -240,9 +223,9 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request, ps httprouter.P
 //
 //     Responses:
 //       200: JSONWebKeySet
-//       401: genericError
-//       403: genericError
-//       500: genericError
+//       401: jsonError
+//       403: jsonError
+//       500: jsonError
 func (h *Handler) UpdateKeySet(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	var keySet jose.JSONWebKeySet
 	var set = ps.ByName("set")
@@ -252,12 +235,7 @@ func (h *Handler) UpdateKeySet(w http.ResponseWriter, r *http.Request, ps httpro
 		return
 	}
 
-	if err := h.r.KeyManager().DeleteKeySet(r.Context(), set); err != nil {
-		h.r.Writer().WriteError(w, r, err)
-		return
-	}
-
-	if err := h.r.KeyManager().AddKeySet(r.Context(), set, &keySet); err != nil {
+	if err := h.r.KeyManager().UpdateKeySet(r.Context(), set, &keySet); err != nil {
 		h.r.Writer().WriteError(w, r, err)
 		return
 	}
@@ -283,9 +261,9 @@ func (h *Handler) UpdateKeySet(w http.ResponseWriter, r *http.Request, ps httpro
 //
 //     Responses:
 //       200: JSONWebKey
-//       401: genericError
-//       403: genericError
-//       500: genericError
+//       401: jsonError
+//       403: jsonError
+//       500: jsonError
 func (h *Handler) UpdateKey(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	var key jose.JSONWebKey
 	var set = ps.ByName("set")
@@ -295,12 +273,7 @@ func (h *Handler) UpdateKey(w http.ResponseWriter, r *http.Request, ps httproute
 		return
 	}
 
-	if err := h.r.KeyManager().DeleteKey(r.Context(), set, key.KeyID); err != nil {
-		h.r.Writer().WriteError(w, r, err)
-		return
-	}
-
-	if err := h.r.KeyManager().AddKey(r.Context(), set, &key); err != nil {
+	if err := h.r.KeyManager().UpdateKey(r.Context(), set, &key); err != nil {
 		h.r.Writer().WriteError(w, r, err)
 		return
 	}
@@ -326,9 +299,9 @@ func (h *Handler) UpdateKey(w http.ResponseWriter, r *http.Request, ps httproute
 //
 //     Responses:
 //       204: emptyResponse
-//       401: genericError
-//       403: genericError
-//       500: genericError
+//       401: jsonError
+//       403: jsonError
+//       500: jsonError
 func (h *Handler) DeleteKeySet(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	var setName = ps.ByName("set")
 
@@ -358,9 +331,9 @@ func (h *Handler) DeleteKeySet(w http.ResponseWriter, r *http.Request, ps httpro
 //
 //     Responses:
 //       204: emptyResponse
-//       401: genericError
-//       403: genericError
-//       500: genericError
+//       401: jsonError
+//       403: jsonError
+//       500: jsonError
 func (h *Handler) DeleteKey(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	var setName = ps.ByName("set")
 	var keyName = ps.ByName("key")

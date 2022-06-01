@@ -4,21 +4,20 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/ory/x/errorsx"
+	"github.com/gobuffalo/pop/v6"
 
 	"github.com/gobuffalo/x/randx"
-
-	"github.com/ory/fosite/storage"
-
-	"github.com/gobuffalo/packr/v2"
-	"github.com/gobuffalo/pop/v5"
 	"github.com/pkg/errors"
 
 	"github.com/ory/fosite"
+	"github.com/ory/fosite/storage"
 	"github.com/ory/hydra/driver/config"
 	"github.com/ory/hydra/jwk"
 	"github.com/ory/hydra/persistence"
+	"github.com/ory/hydra/x"
+	"github.com/ory/x/errorsx"
 	"github.com/ory/x/logrusx"
+	"github.com/ory/x/popx"
 )
 
 var _ persistence.Persister = new(Persister)
@@ -27,8 +26,6 @@ var _ storage.Transactional = new(Persister)
 const transactionContextKey transactionContextType = "transactionConnection"
 
 var (
-	migrations = packr.New("migrations", "migrations")
-
 	ErrTransactionOpen   = errors.New("There is already a transaction in this context.")
 	ErrNoTransactionOpen = errors.New("There is no transaction in this context.")
 )
@@ -36,7 +33,7 @@ var (
 type (
 	Persister struct {
 		conn   *pop.Connection
-		mb     pop.MigrationBox
+		mb     *popx.MigrationBox
 		r      Dependencies
 		config *config.Provider
 		l      *logrusx.Logger
@@ -44,6 +41,9 @@ type (
 	Dependencies interface {
 		ClientHasher() fosite.Hasher
 		KeyCipher() *jwk.AEAD
+		KeyGenerators() map[string]jwk.KeyGenerator
+		x.RegistryLogger
+		x.TracingProvider
 	}
 	transactionContextType string
 )
@@ -73,7 +73,7 @@ func (p *Persister) Commit(ctx context.Context) error {
 		return errorsx.WithStack(ErrNoTransactionOpen)
 	}
 
-	return c.TX.Commit()
+	return errorsx.WithStack(c.TX.Commit())
 }
 
 func (p *Persister) Rollback(ctx context.Context) error {
@@ -82,11 +82,11 @@ func (p *Persister) Rollback(ctx context.Context) error {
 		return errorsx.WithStack(ErrNoTransactionOpen)
 	}
 
-	return c.TX.Rollback()
+	return errorsx.WithStack(c.TX.Rollback())
 }
 
-func NewPersister(c *pop.Connection, r Dependencies, config *config.Provider, l *logrusx.Logger) (*Persister, error) {
-	mb, err := pop.NewMigrationBox(migrations, c)
+func NewPersister(ctx context.Context, c *pop.Connection, r Dependencies, config *config.Provider, l *logrusx.Logger) (*Persister, error) {
+	mb, err := popx.NewMigrationBox(migrations, popx.NewMigrator(c, r.Logger(), r.Tracer(ctx), 0))
 	if err != nil {
 		return nil, errorsx.WithStack(err)
 	}
@@ -105,6 +105,11 @@ func (p *Persister) Connection(ctx context.Context) *pop.Connection {
 		return c.WithContext(ctx)
 	}
 	return p.conn.WithContext(ctx)
+}
+
+func (p *Persister) Ping() error {
+	type pinger interface{ Ping() error }
+	return p.conn.Store.(pinger).Ping()
 }
 
 func (p *Persister) transaction(ctx context.Context, f func(ctx context.Context, c *pop.Connection) error) error {

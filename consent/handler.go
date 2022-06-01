@@ -97,9 +97,8 @@ func (h *Handler) SetRoutes(admin *x.RouterAdmin) {
 //
 //     Responses:
 //       204: emptyResponse
-//       400: genericError
-//       404: genericError
-//       500: genericError
+//       400: jsonError
+//       500: jsonError
 func (h *Handler) DeleteConsentSession(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	subject := r.URL.Query().Get("subject")
 	client := r.URL.Query().Get("client")
@@ -111,12 +110,12 @@ func (h *Handler) DeleteConsentSession(w http.ResponseWriter, r *http.Request, p
 
 	switch {
 	case len(client) > 0:
-		if err := h.r.ConsentManager().RevokeSubjectClientConsentSession(r.Context(), subject, client); err != nil {
+		if err := h.r.ConsentManager().RevokeSubjectClientConsentSession(r.Context(), subject, client); err != nil && !errors.Is(err, x.ErrNotFound) {
 			h.r.Writer().WriteError(w, r, err)
 			return
 		}
 	case allClients:
-		if err := h.r.ConsentManager().RevokeSubjectConsentSession(r.Context(), subject); err != nil {
+		if err := h.r.ConsentManager().RevokeSubjectConsentSession(r.Context(), subject); err != nil && !errors.Is(err, x.ErrNotFound) {
 			h.r.Writer().WriteError(w, r, err)
 			return
 		}
@@ -150,8 +149,8 @@ func (h *Handler) DeleteConsentSession(w http.ResponseWriter, r *http.Request, p
 //
 //     Responses:
 //       200: handledConsentRequestList
-//       400: genericError
-//       500: genericError
+//       400: jsonError
+//       500: jsonError
 func (h *Handler) GetConsentSessions(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	subject := r.URL.Query().Get("subject")
 	if subject == "" {
@@ -210,9 +209,8 @@ func (h *Handler) GetConsentSessions(w http.ResponseWriter, r *http.Request, ps 
 //
 //     Responses:
 //       204: emptyResponse
-//       400: genericError
-//       404: genericError
-//       500: genericError
+//       400: jsonError
+//       500: jsonError
 func (h *Handler) DeleteLoginSession(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	subject := r.URL.Query().Get("subject")
 	if subject == "" {
@@ -220,7 +218,7 @@ func (h *Handler) DeleteLoginSession(w http.ResponseWriter, r *http.Request, ps 
 		return
 	}
 
-	if err := h.r.ConsentManager().RevokeSubjectLoginSession(r.Context(), subject); err != nil {
+	if err := h.r.ConsentManager().RevokeSubjectLoginSession(r.Context(), subject); err != nil && !errors.Is(err, x.ErrNotFound) {
 		h.r.Writer().WriteError(w, r, err)
 		return
 	}
@@ -251,10 +249,10 @@ func (h *Handler) DeleteLoginSession(w http.ResponseWriter, r *http.Request, ps 
 //
 //     Responses:
 //       200: loginRequest
-//       400: genericError
-//       404: genericError
-//       409: genericError
-//       500: genericError
+//       400: jsonError
+//       404: jsonError
+//       410: requestWasHandledResponse
+//       500: jsonError
 func (h *Handler) GetLoginRequest(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	challenge := stringsx.Coalesce(
 		r.URL.Query().Get("login_challenge"),
@@ -271,9 +269,10 @@ func (h *Handler) GetLoginRequest(w http.ResponseWriter, r *http.Request, ps htt
 		h.r.Writer().WriteError(w, r, err)
 		return
 	}
-
 	if request.WasHandled {
-		h.r.Writer().WriteError(w, r, x.ErrConflict.WithDebug("Login request has been used already"))
+		h.r.Writer().WriteCode(w, r, http.StatusGone, &RequestWasHandledResponse{
+			RedirectTo: request.RequestURL,
+		})
 		return
 	}
 
@@ -309,10 +308,10 @@ func (h *Handler) GetLoginRequest(w http.ResponseWriter, r *http.Request, ps htt
 //
 //     Responses:
 //       200: completedRequest
-//       400: genericError
-//       404: genericError
-//       401: genericError
-//       500: genericError
+//       400: jsonError
+//       404: jsonError
+//       401: jsonError
+//       500: jsonError
 func (h *Handler) AcceptLoginRequest(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	challenge := stringsx.Coalesce(
 		r.URL.Query().Get("login_challenge"),
@@ -401,10 +400,10 @@ func (h *Handler) AcceptLoginRequest(w http.ResponseWriter, r *http.Request, ps 
 //
 //     Responses:
 //       200: completedRequest
-//       400: genericError
-//       401: genericError
-//       404: genericError
-//       500: genericError
+//       400: jsonError
+//       401: jsonError
+//       404: jsonError
+//       500: jsonError
 func (h *Handler) RejectLoginRequest(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	challenge := stringsx.Coalesce(
 		r.URL.Query().Get("login_challenge"),
@@ -477,9 +476,9 @@ func (h *Handler) RejectLoginRequest(w http.ResponseWriter, r *http.Request, ps 
 //
 //     Responses:
 //       200: consentRequest
-//       404: genericError
-//       409: genericError
-//       500: genericError
+//       404: jsonError
+//       410: requestWasHandledResponse
+//       500: jsonError
 func (h *Handler) GetConsentRequest(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	challenge := stringsx.Coalesce(
 		r.URL.Query().Get("consent_challenge"),
@@ -496,7 +495,9 @@ func (h *Handler) GetConsentRequest(w http.ResponseWriter, r *http.Request, ps h
 		return
 	}
 	if request.WasHandled {
-		h.r.Writer().WriteError(w, r, x.ErrConflict.WithDebug("Consent request has been used already"))
+		h.r.Writer().WriteCode(w, r, http.StatusGone, &RequestWasHandledResponse{
+			RedirectTo: request.RequestURL,
+		})
 		return
 	}
 
@@ -543,8 +544,8 @@ func (h *Handler) GetConsentRequest(w http.ResponseWriter, r *http.Request, ps h
 //
 //     Responses:
 //       200: completedRequest
-//       404: genericError
-//       500: genericError
+//       404: jsonError
+//       500: jsonError
 func (h *Handler) AcceptConsentRequest(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	challenge := stringsx.Coalesce(
 		r.URL.Query().Get("consent_challenge"),
@@ -622,8 +623,8 @@ func (h *Handler) AcceptConsentRequest(w http.ResponseWriter, r *http.Request, p
 //
 //     Responses:
 //       200: completedRequest
-//       404: genericError
-//       500: genericError
+//       404: jsonError
+//       500: jsonError
 func (h *Handler) RejectConsentRequest(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	challenge := stringsx.Coalesce(
 		r.URL.Query().Get("consent_challenge"),
@@ -688,8 +689,8 @@ func (h *Handler) RejectConsentRequest(w http.ResponseWriter, r *http.Request, p
 //
 //     Responses:
 //       200: completedRequest
-//       404: genericError
-//       500: genericError
+//       404: jsonError
+//       500: jsonError
 func (h *Handler) AcceptLogoutRequest(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	challenge := stringsx.Coalesce(
 		r.URL.Query().Get("logout_challenge"),
@@ -703,7 +704,7 @@ func (h *Handler) AcceptLogoutRequest(w http.ResponseWriter, r *http.Request, ps
 	}
 
 	h.r.Writer().Write(w, r, &RequestHandlerResponse{
-		RedirectTo: urlx.SetQuery(urlx.AppendPaths(h.c.IssuerURL(), "/oauth2/sessions/logout"), url.Values{"logout_verifier": {c.Verifier}}).String(),
+		RedirectTo: urlx.SetQuery(urlx.AppendPaths(h.c.PublicURL(), "/oauth2/sessions/logout"), url.Values{"logout_verifier": {c.Verifier}}).String(),
 	})
 }
 
@@ -723,8 +724,8 @@ func (h *Handler) AcceptLogoutRequest(w http.ResponseWriter, r *http.Request, ps
 //
 //     Responses:
 //       204: emptyResponse
-//       404: genericError
-//       500: genericError
+//       404: jsonError
+//       500: jsonError
 func (h *Handler) RejectLogoutRequest(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	challenge := stringsx.Coalesce(
 		r.URL.Query().Get("logout_challenge"),
@@ -752,24 +753,32 @@ func (h *Handler) RejectLogoutRequest(w http.ResponseWriter, r *http.Request, ps
 //
 //     Responses:
 //       200: logoutRequest
-//       404: genericError
-//       500: genericError
+//       404: jsonError
+//       410: requestWasHandledResponse
+//       500: jsonError
 func (h *Handler) GetLogoutRequest(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	challenge := stringsx.Coalesce(
 		r.URL.Query().Get("logout_challenge"),
 		r.URL.Query().Get("challenge"),
 	)
 
-	c, err := h.r.ConsentManager().GetLogoutRequest(r.Context(), challenge)
+	request, err := h.r.ConsentManager().GetLogoutRequest(r.Context(), challenge)
 	if err != nil {
 		h.r.Writer().WriteError(w, r, err)
 		return
 	}
 
-	if c.WasUsed {
-		h.r.Writer().WriteError(w, r, x.ErrConflict.WithDebug("Logout request has been used already"))
+	// We do not want to share the secret so remove it.
+	if request.Client != nil {
+		request.Client.Secret = ""
+	}
+
+	if request.WasHandled {
+		h.r.Writer().WriteCode(w, r, http.StatusGone, &RequestWasHandledResponse{
+			RedirectTo: request.RequestURL,
+		})
 		return
 	}
 
-	h.r.Writer().Write(w, r, c)
+	h.r.Writer().Write(w, r, request)
 }

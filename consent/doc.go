@@ -20,6 +20,8 @@
 
 package consent
 
+import "time"
+
 // swagger:parameters getLoginRequest
 type swaggerGetLoginRequestByChallenge struct {
 	// in: query
@@ -65,6 +67,14 @@ type swaggerListSubjectConsentSessionsPayload struct {
 	// in: query
 	// required: true
 	Subject string `json:"subject"`
+
+	// The maximum amount of consent sessions to be returned, upper bound is 500 sessions.
+	// in: query
+	Limit int `json:"limit"`
+
+	// The offset from where to start looking.
+	// in: query
+	Offset int `json:"offset"`
 }
 
 // swagger:parameters revokeAuthenticationSession
@@ -137,4 +147,11 @@ type swaggerListHandledConsentRequestsResult struct {
 	// in: body
 	// type: array
 	Body []PreviousConsentSession
+}
+
+// swagger:model flushLoginConsentRequest
+type FlushLoginConsentRequest struct {
+	// NotAfter sets after which point tokens should not be flushed. This is useful when you want to keep a history
+	// of recent login and consent database entries for auditing.
+	NotAfter time.Time `json:"notAfter"`
 }

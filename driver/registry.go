@@ -1,6 +1,12 @@
 package driver
 
 import (
+	"context"
+
+	"github.com/ory/hydra/hsm"
+
+	"github.com/ory/hydra/oauth2/trust"
+
 	"github.com/pkg/errors"
 
 	"github.com/ory/x/errorsx"
@@ -12,9 +18,7 @@ import (
 
 	"github.com/ory/hydra/persistence"
 
-	"github.com/ory/x/tracing"
-
-	"github.com/ory/hydra/metrics/prometheus"
+	prometheus "github.com/ory/x/prometheusx"
 
 	"github.com/ory/x/dbal"
 	"github.com/ory/x/healthx"
@@ -30,10 +34,12 @@ import (
 type Registry interface {
 	dbal.Driver
 
-	Init() error
+	Init(ctx context.Context) error
 
+	WithBuildInfo(v, h, d string) Registry
 	WithConfig(c *config.Provider) Registry
 	WithLogger(l *logrusx.Logger) Registry
+	WithKeyGenerators(kg map[string]jwk.KeyGenerator) Registry
 
 	Config() *config.Provider
 	persistence.Provider
@@ -43,9 +49,10 @@ type Registry interface {
 	client.Registry
 	consent.Registry
 	jwk.Registry
+	trust.Registry
 	oauth2.Registry
 	PrometheusManager() *prometheus.MetricsManager
-	Tracer() *tracing.Tracer
+	x.TracingProvider
 
 	RegisterRoutes(admin *x.RouterAdmin, public *x.RouterPublic)
 	ClientHandler() *client.Handler
@@ -57,29 +64,34 @@ type Registry interface {
 	OAuth2HMACStrategy() *foauth2.HMACSHAStrategy
 	WithOAuth2Provider(f fosite.OAuth2Provider)
 	WithConsentStrategy(c consent.Strategy)
+	WithHsmContext(h hsm.Context)
 }
 
-func NewRegistryFromDSN(c *config.Provider, l *logrusx.Logger) (Registry, error) {
+func NewRegistryFromDSN(ctx context.Context, c *config.Provider, l *logrusx.Logger) (Registry, error) {
+	registry, err := NewRegistryWithoutInit(c, l)
+	if err != nil {
+		return nil, err
+	}
+	if err := registry.Init(ctx); err != nil {
+		return nil, err
+	}
+	return registry, nil
+}
+
+func NewRegistryWithoutInit(c *config.Provider, l *logrusx.Logger) (Registry, error) {
 	driver, err := dbal.GetDriverFor(c.DSN())
 	if err != nil {
 		return nil, errorsx.WithStack(err)
 	}
-
 	registry, ok := driver.(Registry)
 	if !ok {
 		return nil, errors.Errorf("driver of type %T does not implement interface Registry", driver)
 	}
-
-	registry = registry.WithLogger(l).WithConfig(c)
-
-	if err := registry.Init(); err != nil {
-		return nil, err
-	}
-
+	registry = registry.WithLogger(l).WithConfig(c).WithBuildInfo(config.Version, config.Commit, config.Date)
 	return registry, nil
 }
 
-func CallRegistry(r Registry) {
+func CallRegistry(ctx context.Context, r Registry) {
 	r.ClientValidator()
 	r.ClientManager()
 	r.ClientHasher()
@@ -97,5 +109,5 @@ func CallRegistry(r Registry) {
 	r.OpenIDJWTStrategy()
 	r.OpenIDConnectRequestValidator()
 	r.PrometheusManager()
-	r.Tracer()
+	r.Tracer(ctx)
 }

@@ -25,8 +25,8 @@ const isStatusOk = (res) =>
       )
 
 const config = {
-  url: process.env.AUTHORIZATION_SERVER_URL || 'http://127.0.0.1:5000/',
-  public: process.env.PUBLIC_URL || 'http://127.0.0.1:5000/',
+  url: process.env.AUTHORIZATION_SERVER_URL || 'http://127.0.0.1:5004/',
+  public: process.env.PUBLIC_URL || 'http://127.0.0.1:5004/',
   admin: process.env.ADMIN_URL || 'http://127.0.0.1:5001/',
   port: parseInt(process.env.PORT) || 5003
 }
@@ -454,6 +454,11 @@ app.get('/openid/session/check', async (req, res) => {
       Boolean(req.session.oauth2_flow) ||
       (Boolean(req.session.openid_token) && Boolean(req.session.openid_claims))
   })
+})
+
+app.get('/empty', (req, res) => {
+  res.setHeader('Content-Type', 'text/html')
+  res.send(Buffer.from('<div>Nothing to see here.</div>'))
 })
 
 app.listen(config.port, function () {

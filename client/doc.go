@@ -29,8 +29,8 @@
 
 package client
 
-// swagger:parameters createOAuth2Client
-type swaggerCreateClientPayload struct {
+// swagger:parameters createOAuth2Client dynamicClientRegistrationCreateOAuth2Client
+type dynamicClientRegistrationCreateOAuth2Client struct {
 	// in: body
 	// required: true
 	Body Client
@@ -38,6 +38,8 @@ type swaggerCreateClientPayload struct {
 
 // swagger:parameters updateOAuth2Client
 type swaggerUpdateClientPayload struct {
+	// The id of the OAuth 2.0 Client.
+	//
 	// in: path
 	// required: true
 	ID string `json:"id"`
@@ -47,15 +49,58 @@ type swaggerUpdateClientPayload struct {
 	Body Client
 }
 
-// swagger:parameters listOAuth2Clients
-type swaggerListClientsParameter struct {
-	// The maximum amount of policies returned, upper bound is 500 policies
-	// in: query
-	Limit int `json:"limit"`
+// swagger:parameters dynamicClientRegistrationUpdateOAuth2Client
+type dynamicClientRegistrationUpdateOAuth2Client struct {
+	// The id of the OAuth 2.0 Client.
+	//
+	// in: path
+	// required: true
+	ID string `json:"id"`
 
-	// The offset from where to start looking.
-	// in: query
-	Offset int `json:"offset"`
+	// in: body
+	// required: true
+	Body Client
+}
+
+// swagger:parameters patchOAuth2Client
+type swaggerPatchClientPayload struct {
+	// The id of the OAuth 2.0 Client.
+	//
+	// in: path
+	// required: true
+	ID string `json:"id"`
+
+	// in: body
+	// required: true
+	Body patchRequest
+}
+
+// A JSONPatch request
+//
+// swagger:model patchRequest
+type patchRequest []patchDocument
+
+// A JSONPatch document as defined by RFC 6902
+//
+// swagger:model patchDocument
+type patchDocument struct {
+	// The operation to be performed
+	//
+	// required: true
+	// example: "replace"
+	Op string `json:"op"`
+
+	// A JSON-pointer
+	//
+	// required: true
+	// example: "/name"
+	Path string `json:"path"`
+
+	// The value to be used within the operations
+	Value interface{} `json:"value"`
+
+	// A JSON-pointer
+	From string `json:"from"`
 }
 
 // A list of clients.
@@ -71,6 +116,16 @@ type swaggerGetOAuth2Client struct {
 	// The id of the OAuth 2.0 Client.
 	//
 	// in: path
+	// required: true
+	ID string `json:"id"`
+}
+
+// swagger:parameters dynamicClientRegistrationGetOAuth2Client
+type dynamicClientRegistrationGetOAuth2Client struct {
+	// The id of the OAuth 2.0 Client.
+	//
+	// in: path
+	// required: true
 	ID string `json:"id"`
 }
 
@@ -79,5 +134,15 @@ type swaggerDeleteOAuth2Client struct {
 	// The id of the OAuth 2.0 Client.
 	//
 	// in: path
+	// required: true
+	ID string `json:"id"`
+}
+
+// swagger:parameters dynamicClientRegistrationDeleteOAuth2Client
+type dynamicClientRegistrationDeleteOAuth2Client struct {
+	// The id of the OAuth 2.0 Client.
+	//
+	// in: path
+	// required: true
 	ID string `json:"id"`
 }

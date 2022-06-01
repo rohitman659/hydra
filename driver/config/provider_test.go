@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -25,7 +26,7 @@ import (
 )
 
 func newProvider() *Provider {
-	return MustNew(logrusx.New("", ""))
+	return MustNew(context.Background(), logrusx.New("", ""))
 }
 
 func setupEnv(env map[string]string) func(t *testing.T) (func(), func()) {
@@ -89,7 +90,7 @@ func TestCORSOptions(t *testing.T) {
 	p := newProvider()
 	p.MustSet("serve.public.cors.enabled", true)
 
-	conf, enabled := p.PublicCORS()
+	conf, enabled := p.CORS(PublicInterface)
 	assert.True(t, enabled)
 
 	assert.EqualValues(t, cors.Options{
@@ -108,14 +109,14 @@ func TestProviderAdminDisableHealthAccessLog(t *testing.T) {
 	l := logrusx.New("", "")
 	l.Logrus().SetOutput(ioutil.Discard)
 
-	p := MustNew(l)
+	p := MustNew(context.Background(), l)
 
-	value := p.AdminDisableHealthAccessLog()
+	value := p.DisableHealthAccessLog(AdminInterface)
 	assert.Equal(t, false, value)
 
-	p.MustSet(KeyAdminDisableHealthAccessLog, "true")
+	p.MustSet(AdminInterface.Key(KeySuffixDisableHealthAccessLog), "true")
 
-	value = p.AdminDisableHealthAccessLog()
+	value = p.DisableHealthAccessLog(AdminInterface)
 	assert.Equal(t, true, value)
 }
 
@@ -123,42 +124,86 @@ func TestProviderPublicDisableHealthAccessLog(t *testing.T) {
 	l := logrusx.New("", "")
 	l.Logrus().SetOutput(ioutil.Discard)
 
-	p := MustNew(l)
+	p := MustNew(context.Background(), l)
 
-	value := p.PublicDisableHealthAccessLog()
+	value := p.DisableHealthAccessLog(PublicInterface)
 	assert.Equal(t, false, value)
 
-	p.MustSet(KeyPublicDisableHealthAccessLog, "true")
+	p.MustSet(PublicInterface.Key(KeySuffixDisableHealthAccessLog), "true")
 
-	value = p.PublicDisableHealthAccessLog()
+	value = p.DisableHealthAccessLog(PublicInterface)
+	assert.Equal(t, true, value)
+}
+
+func TestPublicAllowDynamicRegistration(t *testing.T) {
+	l := logrusx.New("", "")
+	l.Logrus().SetOutput(ioutil.Discard)
+
+	p := MustNew(context.Background(), l)
+
+	value := p.PublicAllowDynamicRegistration()
+	assert.Equal(t, false, value)
+
+	p.MustSet(KeyPublicAllowDynamicRegistration, "true")
+
+	value = p.PublicAllowDynamicRegistration()
 	assert.Equal(t, true, value)
 }
 
 func TestProviderIssuerURL(t *testing.T) {
 	l := logrusx.New("", "")
 	l.Logrus().SetOutput(ioutil.Discard)
-	p := MustNew(l)
+	p := MustNew(context.Background(), l)
 	p.MustSet(KeyIssuerURL, "http://hydra.localhost")
 	assert.Equal(t, "http://hydra.localhost/", p.IssuerURL().String())
 
-	p2 := MustNew(l)
+	p2 := MustNew(context.Background(), l)
 	p2.MustSet(KeyIssuerURL, "http://hydra.localhost/")
 	assert.Equal(t, "http://hydra.localhost/", p2.IssuerURL().String())
+}
+
+func TestProviderIssuerPublicURL(t *testing.T) {
+	l := logrusx.New("", "")
+	l.Logrus().SetOutput(ioutil.Discard)
+	p := MustNew(context.Background(), l)
+	p.MustSet(KeyIssuerURL, "http://hydra.localhost")
+	p.MustSet(KeyPublicURL, "http://hydra.example")
+
+	assert.Equal(t, "http://hydra.localhost/", p.IssuerURL().String())
+	assert.Equal(t, "http://hydra.example/", p.PublicURL().String())
+	assert.Equal(t, "http://hydra.localhost/.well-known/jwks.json", p.JWKSURL().String())
+	assert.Equal(t, "http://hydra.example/oauth2/fallbacks/consent", p.ConsentURL().String())
+	assert.Equal(t, "http://hydra.example/oauth2/fallbacks/login", p.LoginURL().String())
+	assert.Equal(t, "http://hydra.example/oauth2/fallbacks/logout", p.LogoutURL().String())
+	assert.Equal(t, "http://hydra.example/oauth2/token", p.OAuth2TokenURL().String())
+	assert.Equal(t, "http://hydra.example/oauth2/auth", p.OAuth2AuthURL().String())
+	assert.Equal(t, "http://hydra.example/userinfo", p.OIDCDiscoveryUserinfoEndpoint().String())
+
+	p2 := MustNew(context.Background(), l)
+	p2.MustSet(KeyIssuerURL, "http://hydra.localhost")
+	assert.Equal(t, "http://hydra.localhost/", p2.IssuerURL().String())
+	assert.Equal(t, "http://hydra.localhost/", p2.PublicURL().String())
+	assert.Equal(t, "http://hydra.localhost/.well-known/jwks.json", p2.JWKSURL().String())
+	assert.Equal(t, "http://hydra.localhost/oauth2/fallbacks/consent", p2.ConsentURL().String())
+	assert.Equal(t, "http://hydra.localhost/oauth2/fallbacks/login", p2.LoginURL().String())
+	assert.Equal(t, "http://hydra.localhost/oauth2/fallbacks/logout", p2.LogoutURL().String())
+	assert.Equal(t, "http://hydra.localhost/oauth2/token", p2.OAuth2TokenURL().String())
+	assert.Equal(t, "http://hydra.localhost/oauth2/auth", p2.OAuth2AuthURL().String())
+	assert.Equal(t, "http://hydra.localhost/userinfo", p2.OIDCDiscoveryUserinfoEndpoint().String())
 }
 
 func TestProviderCookieSameSiteMode(t *testing.T) {
 	l := logrusx.New("", "")
 	l.Logrus().SetOutput(ioutil.Discard)
 
-	p := MustNew(l, configx.SkipValidation())
-	p.MustSet("dangerous-force-http", false)
+	p := MustNew(context.Background(), l, configx.SkipValidation())
 	p.MustSet(KeyCookieSameSiteMode, "")
 	assert.Equal(t, http.SameSiteDefaultMode, p.CookieSameSiteMode())
 
 	p.MustSet(KeyCookieSameSiteMode, "none")
 	assert.Equal(t, http.SameSiteNoneMode, p.CookieSameSiteMode())
 
-	p = MustNew(l, configx.SkipValidation())
+	p = MustNew(context.Background(), l, configx.SkipValidation())
 	p.MustSet("dangerous-force-http", true)
 	assert.Equal(t, http.SameSiteLaxMode, p.CookieSameSiteMode())
 	p.MustSet(KeyCookieSameSiteMode, "none")
@@ -167,28 +212,28 @@ func TestProviderCookieSameSiteMode(t *testing.T) {
 
 func TestViperProviderValidates(t *testing.T) {
 	l := logrusx.New("", "")
-	c := MustNew(l, configx.WithConfigFiles("../../internal/.hydra.yaml"))
+	c := MustNew(context.Background(), l, configx.WithConfigFiles("../../internal/.hydra.yaml"))
 
 	// log
 	assert.Equal(t, "debug", c.Source().String(KeyLogLevel))
 	assert.Equal(t, "json", c.Source().String("log.format"))
 
 	// serve
-	assert.Equal(t, "localhost:1", c.PublicListenOn())
-	assert.Equal(t, "localhost:2", c.AdminListenOn())
+	assert.Equal(t, "localhost:1", c.ListenOn(PublicInterface))
+	assert.Equal(t, "localhost:2", c.ListenOn(AdminInterface))
 
-	expectedPublicPermission := &UnixPermission{
+	expectedPublicPermission := &configx.UnixPermission{
 		Owner: "hydra",
 		Group: "hydra-public-api",
 		Mode:  0775,
 	}
-	expectedAdminPermission := &UnixPermission{
+	expectedAdminPermission := &configx.UnixPermission{
 		Owner: "hydra",
 		Group: "hydra-admin-api",
 		Mode:  0770,
 	}
-	assert.Equal(t, expectedPublicPermission, c.PublicSocketPermission())
-	assert.Equal(t, expectedAdminPermission, c.AdminSocketPermission())
+	assert.Equal(t, expectedPublicPermission, c.SocketPermission(PublicInterface))
+	assert.Equal(t, expectedAdminPermission, c.SocketPermission(AdminInterface))
 
 	expectedCors := cors.Options{
 		AllowedOrigins:     []string{"https://example.com"},
@@ -201,22 +246,22 @@ func TestViperProviderValidates(t *testing.T) {
 		OptionsPassthrough: true,
 	}
 
-	gc, enabled := c.AdminCORS()
+	gc, enabled := c.CORS(AdminInterface)
 	assert.False(t, enabled)
 	assert.Equal(t, expectedCors, gc)
 
-	gc, enabled = c.PublicCORS()
+	gc, enabled = c.CORS(PublicInterface)
 	assert.False(t, enabled)
 	assert.Equal(t, expectedCors, gc)
 
-	assert.Equal(t, []string{"127.0.0.1/32"}, c.AllowTLSTerminationFrom())
+	assert.Equal(t, []string{"127.0.0.1/32"}, c.TLS(PublicInterface).AllowTerminationFrom())
 	assert.Equal(t, "/path/to/file.pem", c.Source().String("serve.tls.key.path"))
 	assert.Equal(t, "b3J5IGh5ZHJhIGlzIGF3ZXNvbWUK", c.Source().String("serve.tls.cert.base64"))
 	assert.Equal(t, http.SameSiteLaxMode, c.CookieSameSiteMode())
 	assert.Equal(t, true, c.CookieSameSiteLegacyWorkaround())
 
 	// dsn
-	assert.Equal(t, dbal.InMemoryDSN, c.DSN())
+	assert.Equal(t, dbal.SQLiteInMemory, c.DSN())
 
 	// webfinger
 	assert.Equal(t, []string{"hydra.openid.id-token"}, c.WellKnownKeys())
@@ -272,15 +317,20 @@ func TestViperProviderValidates(t *testing.T) {
 	assert.EqualValues(t, &tracing.Config{
 		ServiceName: "hydra service",
 		Provider:    "jaeger",
-		Jaeger: &tracing.JaegerConfig{
-			LocalAgentHostPort: "127.0.0.1:6831",
-			SamplerType:        "const",
-			SamplerValue:       1,
-			SamplerServerURL:   "http://sampling",
-			Propagation:        "jaeger",
-		},
-		Zipkin: &tracing.ZipkinConfig{
-			ServerURL: "http://zipkin/api/v2/spans",
+		Providers: &tracing.ProvidersConfig{
+			Jaeger: &tracing.JaegerConfig{
+				LocalAgentAddress: "127.0.0.1:6831",
+				Sampling: &tracing.JaegerSampling{
+					Type:      "const",
+					Value:     1,
+					ServerURL: "http://sampling",
+				},
+				Propagation:       "jaeger",
+				MaxTagValueLength: 1024,
+			},
+			Zipkin: &tracing.ZipkinConfig{
+				ServerURL: "http://zipkin/api/v2/spans",
+			},
 		},
 	}, c.Tracing())
 }
@@ -292,7 +342,7 @@ func TestSetPerm(t *testing.T) {
 
 	// We cannot test setting owner and group, because we don't know what the
 	// tester has access to.
-	_ = (&UnixPermission{
+	_ = (&configx.UnixPermission{
 		Owner: "",
 		Group: "",
 		Mode:  0654,
@@ -305,4 +355,30 @@ func TestSetPerm(t *testing.T) {
 
 	require.NoError(t, f.Close())
 	require.NoError(t, os.Remove(path))
+}
+
+func TestLoginConsentURL(t *testing.T) {
+	l := logrusx.New("", "")
+	l.Logrus().SetOutput(ioutil.Discard)
+	p := MustNew(context.Background(), l)
+	p.MustSet(KeyLoginURL, "http://localhost:8080/oauth/login")
+	p.MustSet(KeyConsentURL, "http://localhost:8080/oauth/consent")
+
+	assert.Equal(t, "http://localhost:8080/oauth/login", p.LoginURL().String())
+	assert.Equal(t, "http://localhost:8080/oauth/consent", p.ConsentURL().String())
+
+	p2 := MustNew(context.Background(), l)
+	p2.MustSet(KeyLoginURL, "http://localhost:3000/#/oauth/login")
+	p2.MustSet(KeyConsentURL, "http://localhost:3000/#/oauth/consent")
+
+	assert.Equal(t, "http://localhost:3000/#/oauth/login", p2.LoginURL().String())
+	assert.Equal(t, "http://localhost:3000/#/oauth/consent", p2.ConsentURL().String())
+}
+
+func TestInfinitRefreshTokenTTL(t *testing.T) {
+	l := logrusx.New("", "")
+	l.Logrus().SetOutput(ioutil.Discard)
+	c := MustNew(context.Background(), l, configx.WithValue("ttl.refresh_token", -1))
+
+	assert.Equal(t, -1*time.Nanosecond, c.RefreshTokenLifespan())
 }

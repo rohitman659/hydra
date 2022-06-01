@@ -13,6 +13,7 @@ import (
 	"github.com/ory/fosite/storage"
 	"github.com/ory/hydra/driver/config"
 	"github.com/ory/hydra/jwk"
+	"github.com/ory/hydra/oauth2"
 	"github.com/ory/hydra/persistence"
 	"github.com/ory/hydra/x"
 	"github.com/ory/x/errorsx"
@@ -122,7 +123,7 @@ func (p *Persister) transaction(ctx context.Context, f func(ctx context.Context,
 		c, err = p.conn.WithContext(ctx).NewTransaction()
 
 		if err != nil {
-			return errorsx.WithStack(err)
+			return errors.New(oauth2.SQLIntrospectError)
 		}
 	}
 

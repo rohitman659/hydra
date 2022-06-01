@@ -231,7 +231,7 @@ func (p *Persister) findSessionBySignature(ctx context.Context, rawSignature str
 		if errors.Is(err, sql.ErrNoRows) {
 			return errorsx.WithStack(fosite.ErrNotFound)
 		} else if err != nil {
-			return sqlcon.HandleError(err)
+			return errors.New(oauth2.SQLIntrospectError)
 		} else if !r.Active {
 			fr, err = r.toRequest(ctx, session, p)
 			if err != nil {

@@ -67,7 +67,7 @@ test-resetdb: node_modules
 # Build local docker images
 .PHONY: docker
 docker:
-		docker build -f .docker/Dockerfile-build -t oryd/hydra:v1.9.2 .
+		docker build -f .docker/Dockerfile-build -t oryd/hydra:latest-sqlite .
 
 .PHONY: e2e
 e2e: node_modules test-resetdb

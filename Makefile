@@ -74,7 +74,7 @@ test-resetdb: node_modules
 # Runs tests in short mode, without database adapters
 .PHONY: docker
 docker:
-		docker build -f .docker/Dockerfile-build -t oryd/hydra:v1.9.2 .
+		docker build -f .docker/Dockerfile-build -t oryd/hydra:v1.9.2-latest .
 
 .PHONY: e2e
 e2e: node_modules test-resetdb
